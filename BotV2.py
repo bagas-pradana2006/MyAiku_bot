@@ -3,7 +3,6 @@ from datetime import datetime
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -15,14 +14,15 @@ from telegram.ext import (
     filters,
 )
 import sqlite3
+import os
 from dotenv import load_dotenv
 load_dotenv()
 
 # ==========================================
 # TOKEN DAN API  ← ganti di sini
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("8955283052:AAG01BpcuKR96ZDT5v4iDi98oNwoyFvAV50")
-WEATHER_API_KEY = os.getenv("b78a67670b9d64c0647d3e445f8b4aba")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 CHAT_ID_KAMU = int(os.getenv("CHAT_ID_KAMU"))
 
 # ==========================================
