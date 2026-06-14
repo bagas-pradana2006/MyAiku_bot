@@ -841,7 +841,8 @@ if __name__ == "__main__":
     init_db()
     print("✅ Database SQLite siap.")
     print("🤖 Bot V2 menyala...")
-
+    
+    print("TOKEN:", repr(TELEGRAM_TOKEN))
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     # Command handlers
