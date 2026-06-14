@@ -23,7 +23,7 @@ load_dotenv()
 # ==========================================
 TELEGRAM_TOKEN = os.getenv("8955283052:AAG01BpcuKR96ZDT5v4iDi98oNwoyFvAV50")
 WEATHER_API_KEY = os.getenv("b78a67670b9d64c0647d3e445f8b4aba")
-CHAT_ID_KAMU = int(os.getenv("1498476249"))
+CHAT_ID_KAMU = int(os.getenv("CHAT_ID_KAMU"))
 
 # ==========================================
 # STATE untuk ConversationHandler
