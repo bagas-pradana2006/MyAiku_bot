@@ -1,5 +1,8 @@
+import io
+import os
 import requests
-from datetime import datetime
+import pytz
+from datetime import datetime, time
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -14,16 +17,15 @@ from telegram.ext import (
     filters,
 )
 import sqlite3
-import os
 from dotenv import load_dotenv
 load_dotenv()
 
 # ==========================================
-# TOKEN DAN API  ← ganti di sini
+# TOKEN DAN API
 # ==========================================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN  = os.getenv("TELEGRAM_TOKEN")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
-CHAT_ID_KAMU = int(os.getenv("CHAT_ID_KAMU"))
+CHAT_ID_KAMU    = int(os.getenv("CHAT_ID_KAMU"))
 
 # ==========================================
 # STATE untuk ConversationHandler
@@ -45,7 +47,7 @@ CHAT_ID_KAMU = int(os.getenv("CHAT_ID_KAMU"))
 # ==========================================
 conn   = sqlite3.connect("database.db", check_same_thread=False)
 cursor = conn.cursor()
-user_data = {}
+
 
 def init_db():
     cursor.executescript("""
@@ -74,6 +76,23 @@ def init_db():
             jam   TEXT NOT NULL,
             pesan TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS target_tabungan (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            target  INTEGER NOT NULL,
+            bulan   TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS jurnal (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            tanggal TEXT NOT NULL,
+            isi     TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS deadline_tugas (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            tanggal TEXT NOT NULL,
+            matkul  TEXT NOT NULL,
+            tugas   TEXT NOT NULL,
+            selesai INTEGER DEFAULT 0
+        );
     """)
     conn.commit()
 
@@ -87,7 +106,13 @@ def catat_histori(aksi: str):
 
 
 def ambil_target() -> int:
-    cursor.execute("SELECT nilai FROM pengaturan WHERE kunci = 'target'")
+    """Satu sumber target: tabel target_tabungan bulan ini."""
+    bulan = datetime.now().strftime("%Y-%m")
+    cursor.execute("""
+        SELECT target FROM target_tabungan
+        WHERE bulan = ?
+        ORDER BY id DESC LIMIT 1
+    """, (bulan,))
     row = cursor.fetchone()
     return int(row[0]) if row else 0
 
@@ -98,19 +123,19 @@ def ambil_target() -> int:
 def kb_home():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📝 Tugas",     callback_data="menu_tugas"),
-            InlineKeyboardButton("💰 Keuangan",  callback_data="menu_keuangan"),
+            InlineKeyboardButton("📝 Tugas",      callback_data="menu_tugas"),
+            InlineKeyboardButton("💰 Keuangan",   callback_data="menu_keuangan"),
         ],
         [
-            InlineKeyboardButton("🌦️ Cuaca",     callback_data="menu_cuaca"),
-            InlineKeyboardButton("📊 Statistik", callback_data="menu_statistik"),
+            InlineKeyboardButton("🌦️ Cuaca",      callback_data="menu_cuaca"),
+            InlineKeyboardButton("📊 Statistik",  callback_data="menu_statistik"),
         ],
         [
-            InlineKeyboardButton("📜 Histori",   callback_data="menu_histori"),
-            InlineKeyboardButton("⚙️ Pengaturan",callback_data="menu_setting"),
+            InlineKeyboardButton("📜 Histori",    callback_data="menu_histori"),
+            InlineKeyboardButton("⚙️ Pengaturan", callback_data="menu_setting"),
         ],
         [
-            InlineKeyboardButton("💾 Backup",    callback_data="aksi_backup"),
+            InlineKeyboardButton("💾 Backup",     callback_data="aksi_backup"),
         ],
     ])
 
@@ -148,8 +173,8 @@ def kb_kategori():
             InlineKeyboardButton("🎮 Hiburan",   callback_data="kat_hiburan"),
         ],
         [InlineKeyboardButton("✏️ Ketik Manual", callback_data="aksi_catat_uang_manual")],
-        [InlineKeyboardButton("⬅️ Kembali", callback_data="menu_keuangan")],
-        [InlineKeyboardButton("🏠 Home",    callback_data="home")],
+        [InlineKeyboardButton("⬅️ Kembali",      callback_data="menu_keuangan")],
+        [InlineKeyboardButton("🏠 Home",         callback_data="home")],
     ])
 
 
@@ -299,10 +324,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data in ("kat_makan", "kat_transport", "kat_belanja", "kat_hiburan"):
         kategori_map = {
-            "kat_makan": "makan",
+            "kat_makan":     "makan",
             "kat_transport": "transport",
-            "kat_belanja": "belanja",
-            "kat_hiburan": "hiburan",
+            "kat_belanja":   "belanja",
+            "kat_hiburan":   "hiburan",
         }
         kategori = kategori_map[data]
         context.user_data["kategori"] = kategori
@@ -393,14 +418,11 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # HANDLER PESAN TEKS (mode-based)
 # ==========================================
 async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mode  = context.user_data.get("mode")
-    teks  = update.message.text.strip()
+    mode = context.user_data.get("mode")
+    teks = update.message.text.strip()
 
     if not mode:
-        # Tidak ada mode aktif — abaikan / tampilkan home
-        await update.message.reply_text(
-            "Gunakan /start untuk membuka menu.",
-        )
+        await update.message.reply_text("Gunakan /start untuk membuka menu.")
         return
 
     # ── Tambah Tugas ───────────────────────
@@ -439,7 +461,7 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❌ Masukkan angka. Coba lagi:")
 
-    # ── Catat Uang (manual) ────────────────
+    # ── Catat Uang (manual satu baris) ─────
     elif mode == "catat_uang":
         bagian = teks.split()
         if len(bagian) < 3:
@@ -452,7 +474,7 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kategori   = bagian[0]
             nominal    = int(bagian[1])
             keterangan = " ".join(bagian[2:])
-            tanggal    = datetime.now().strftime("%d-%m-%Y")
+            tanggal    = datetime.now().strftime("%Y-%m-%d")
             cursor.execute(
                 "INSERT INTO pengeluaran (tanggal, kategori, nominal, keterangan) VALUES (?,?,?,?)",
                 (tanggal, kategori, nominal, keterangan),
@@ -469,7 +491,10 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_keuangan(),
             )
         except ValueError:
-            await update.message.reply_text("❌ Nominal harus angka. Contoh: `makan 15000 nasi goreng`", parse_mode="Markdown")
+            await update.message.reply_text(
+                "❌ Nominal harus angka. Contoh: `makan 15000 nasi goreng`",
+                parse_mode="Markdown",
+            )
 
     # ── Catat Uang (via tombol) — nominal ──
     elif mode == "catat_uang_nominal":
@@ -494,16 +519,16 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keterangan = teks
         kategori   = context.user_data.get("kategori", "lainnya")
         nominal    = context.user_data.get("nominal", 0)
-        tanggal    = datetime.now().strftime("%d-%m-%Y")
+        tanggal    = datetime.now().strftime("%Y-%m-%d")
         cursor.execute(
             "INSERT INTO pengeluaran (tanggal, kategori, nominal, keterangan) VALUES (?,?,?,?)",
             (tanggal, kategori, nominal, keterangan),
         )
         conn.commit()
         catat_histori(f"{kategori} Rp{nominal:,} - {keterangan}")
-        context.user_data.pop("mode", None)
-        context.user_data.pop("kategori", None)
-        context.user_data.pop("nominal", None)
+        context.user_data.pop("mode",      None)
+        context.user_data.pop("kategori",  None)
+        context.user_data.pop("nominal",   None)
         await update.message.reply_text(
             f"✅ Dicatat!\n\n"
             f"🏷️ Kategori : *{kategori}*\n"
@@ -526,10 +551,10 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if d.get("cod") != 200:
                 await update.message.reply_text("❌ Kota tidak ditemukan. Coba ketik ulang:")
                 return
-            suhu      = d["main"]["temp"]
-            kelembapan= d["main"]["humidity"]
-            kondisi   = d["weather"][0]["description"]
-            angin     = d["wind"]["speed"]
+            suhu       = d["main"]["temp"]
+            kelembapan = d["main"]["humidity"]
+            kondisi    = d["weather"][0]["description"]
+            angin      = d["wind"]["speed"]
             context.user_data.pop("mode")
             await update.message.reply_text(
                 f"🌦️ *Cuaca di {kota.title()}*\n\n"
@@ -547,9 +572,11 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif mode == "set_target":
         try:
             nominal = int(teks.replace(".", "").replace(",", ""))
+            bulan   = datetime.now().strftime("%Y-%m")
+            cursor.execute("DELETE FROM target_tabungan WHERE bulan=?", (bulan,))
             cursor.execute(
-                "INSERT OR REPLACE INTO pengaturan (kunci, nilai) VALUES ('target', ?)",
-                (str(nominal),),
+                "INSERT INTO target_tabungan (target, bulan) VALUES (?,?)",
+                (nominal, bulan),
             )
             conn.commit()
             context.user_data.pop("mode")
@@ -559,7 +586,10 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_setting(),
             )
         except ValueError:
-            await update.message.reply_text("❌ Masukkan angka saja. Contoh: `2000000`", parse_mode="Markdown")
+            await update.message.reply_text(
+                "❌ Masukkan angka saja. Contoh: `2000000`",
+                parse_mode="Markdown",
+            )
 
     # ── Tambah Pengingat ───────────────────
     elif mode == "tambah_pengingat":
@@ -574,7 +604,10 @@ async def teks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             datetime.strptime(jam, "%H:%M")
         except ValueError:
-            await update.message.reply_text("❌ Format jam salah. Gunakan HH:MM.\nContoh: `19:00`", parse_mode="Markdown")
+            await update.message.reply_text(
+                "❌ Format jam salah. Gunakan HH:MM.\nContoh: `19:00`",
+                parse_mode="Markdown",
+            )
             return
         cursor.execute("INSERT INTO pengingat (jam, pesan) VALUES (?, ?)", (jam, pesan_ingat))
         conn.commit()
@@ -605,41 +638,47 @@ async def _kirim_list_tugas_edit(query):
 
 
 async def _kirim_statistik_edit(query):
-    cursor.execute("SELECT SUM(nominal), COUNT(*) FROM pengeluaran")
+    # Sama persis dengan /statistik — pakai filter bulan ini
+    bulan = datetime.now().strftime("%Y-%m")
+    cursor.execute("""
+        SELECT SUM(nominal), COUNT(*) FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+    """, (bulan,))
     row    = cursor.fetchone()
     total  = row[0] or 0
     jumlah = row[1] or 0
 
     if jumlah == 0:
         await query.edit_message_text(
-            "📊 Belum ada data pengeluaran.",
+            "📊 Belum ada data pengeluaran bulan ini.",
             reply_markup=kb_back_home(),
         )
         return
 
     cursor.execute("""
         SELECT kategori, SUM(nominal) as jml
-        FROM pengeluaran GROUP BY kategori ORDER BY jml DESC LIMIT 5
-    """)
+        FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+        GROUP BY kategori ORDER BY jml DESC LIMIT 5
+    """, (bulan,))
     kat_rows = cursor.fetchall()
 
-    rata      = total / max(1, datetime.now().day)
-    tgt       = ambil_target()
-    sisa      = tgt - total
-    persen    = round((total / tgt * 100), 1) if tgt > 0 else 0
+    rata   = total / max(1, datetime.now().day)
+    tgt    = ambil_target()
+    sisa   = tgt - total
+    persen = round((total / tgt * 100), 1) if tgt > 0 else 0
 
-    # Progress bar visual
-    bar_isi   = min(10, int(persen / 10))
-    bar       = "█" * bar_isi + "░" * (10 - bar_isi)
+    bar_isi = min(10, int(persen / 10))
+    bar     = "█" * bar_isi + "░" * (10 - bar_isi)
 
-    pesan  = f"📈 *STATISTIK KEUANGAN*\n\n"
+    pesan  = f"📈 *STATISTIK BULAN {bulan}*\n\n"
     pesan += f"💸 Total Pengeluaran : *Rp {total:,}*\n"
     pesan += f"🧾 Jumlah Transaksi  : *{jumlah}*\n"
     pesan += f"📊 Rata-rata/hari    : *Rp {int(rata):,}*\n\n"
     pesan += f"🎯 Target Bulan      : *Rp {tgt:,}*\n"
     pesan += f"💰 Sisa Budget       : *Rp {sisa:,}*\n"
     pesan += f"📉 Terpakai          : `{bar}` {persen}%\n\n"
-    pesan += f"🏆 *Top Kategori:*\n"
+    pesan += "🏆 *Top Kategori:*\n"
     for k, v in kat_rows:
         pesan += f"   • {k}: Rp {v:,}\n"
 
@@ -659,7 +698,7 @@ async def _kirim_histori_edit(query):
 
 
 async def _kirim_laporan_hari_edit(query):
-    hari_ini = datetime.now().strftime("%d-%m-%Y")
+    hari_ini = datetime.now().strftime("%Y-%m-%d")
     cursor.execute(
         "SELECT nominal, keterangan, kategori FROM pengeluaran WHERE tanggal = ?",
         (hari_ini,),
@@ -681,9 +720,9 @@ async def _kirim_laporan_hari_edit(query):
 
 
 async def _kirim_laporan_bulan_edit(query):
-    bulan = datetime.now().strftime("%m-%Y")
+    bulan = datetime.now().strftime("%Y-%m")
     cursor.execute(
-        "SELECT SUM(nominal), COUNT(*) FROM pengeluaran WHERE substr(tanggal, 4, 7) = ?",
+        "SELECT SUM(nominal), COUNT(*) FROM pengeluaran WHERE substr(tanggal, 1, 7) = ?",
         (bulan,),
     )
     total, jumlah = cursor.fetchone()
@@ -693,7 +732,7 @@ async def _kirim_laporan_bulan_edit(query):
     cursor.execute("""
         SELECT kategori, SUM(nominal) as jml
         FROM pengeluaran
-        WHERE substr(tanggal, 4, 7) = ?
+        WHERE substr(tanggal, 1, 7) = ?
         GROUP BY kategori ORDER BY jml DESC
     """, (bulan,))
     kat_rows = cursor.fetchall()
@@ -733,19 +772,18 @@ async def _kirim_grafik(query):
     plt.ylabel("Rupiah")
     plt.tight_layout()
 
-    path = "grafik.png"
-    plt.savefig(path)
+    # Simpan ke buffer (tidak tulis ke disk)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png")
     plt.close()
+    buf.seek(0)
 
-    with open(path, "rb") as foto:
-        await query.message.reply_photo(
-            photo=foto,
-            caption="📊 *Grafik Pengeluaran per Kategori*",
-            parse_mode="Markdown",
-            reply_markup=kb_back("menu_keuangan"),
-        )
-
-    os.remove(path)
+    await query.message.reply_photo(
+        photo=buf,
+        caption="📊 *Grafik Pengeluaran per Kategori*",
+        parse_mode="Markdown",
+        reply_markup=kb_back("menu_keuangan"),
+    )
 
 
 # ==========================================
@@ -794,7 +832,7 @@ async def cmd_uang(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kategori   = context.args[0]
         nominal    = int(context.args[1])
         keterangan = " ".join(context.args[2:])
-        tanggal    = datetime.now().strftime("%d-%m-%Y")
+        tanggal    = datetime.now().strftime("%Y-%m-%d")
         cursor.execute(
             "INSERT INTO pengeluaran (tanggal, kategori, nominal, keterangan) VALUES (?,?,?,?)",
             (tanggal, kategori, nominal, keterangan),
@@ -834,6 +872,479 @@ async def cmd_cuaca(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {e}")
 
 
+async def target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) == 0:
+        await update.message.reply_text("Contoh:\n/target 3000000")
+        return
+
+    target_uang = int(context.args[0])
+    bulan = datetime.now().strftime("%Y-%m")
+
+    cursor.execute("DELETE FROM target_tabungan WHERE bulan=?", (bulan,))
+    cursor.execute(
+        "INSERT INTO target_tabungan (target, bulan) VALUES (?,?)",
+        (target_uang, bulan)
+    )
+    conn.commit()
+
+    await update.message.reply_text(f"🎯 Target bulan ini:\nRp {target_uang:,}")
+
+
+async def jurnal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    isi = " ".join(context.args)
+    if not isi:
+        await update.message.reply_text("Contoh:\n/jurnal Hari ini belajar Railway")
+        return
+
+    tanggal = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute(
+        "INSERT INTO jurnal (tanggal, isi) VALUES (?,?)",
+        (tanggal, isi)
+    )
+    conn.commit()
+    await update.message.reply_text("📔 Jurnal tersimpan.")
+
+
+async def jurnal_hari_ini(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tanggal = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("SELECT isi FROM jurnal WHERE tanggal=?", (tanggal,))
+    data = cursor.fetchall()
+
+    if not data:
+        await update.message.reply_text("Belum ada jurnal hari ini.")
+        return
+
+    pesan = "📔 Jurnal Hari Ini\n\n"
+    for i, item in enumerate(data):
+        pesan += f"{i+1}. {item[0]}\n"
+    await update.message.reply_text(pesan)
+
+
+async def progres(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bulan = datetime.now().strftime("%Y-%m")
+
+    cursor.execute("""
+        SELECT target FROM target_tabungan
+        WHERE bulan = ?
+        ORDER BY id DESC LIMIT 1
+    """, (bulan,))
+    data = cursor.fetchone()
+
+    if not data:
+        await update.message.reply_text("Belum ada target bulan ini.")
+        return
+
+    nilai_target = data[0]
+
+    cursor.execute("""
+        SELECT SUM(nominal) FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+    """, (bulan,))
+    total = cursor.fetchone()[0] or 0
+
+    persen = (total / nilai_target * 100) if nilai_target > 0 else 0
+
+    await update.message.reply_text(
+        f"🎯 Target : Rp {nilai_target:,}\n"
+        f"💰 Pengeluaran : Rp {total:,}\n"
+        f"📈 Progress : {persen:.1f}%"
+    )
+
+
+async def deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    teks = update.message.text.replace("/deadline", "").strip()
+
+    if "|" not in teks:
+        await update.message.reply_text(
+            "Format:\n/deadline Matkul | Tugas | YYYY-MM-DD\n\n"
+            "Contoh:\n/deadline AI | Makalah AI | 2026-06-30"
+        )
+        return
+
+    bagian = teks.split("|")
+    if len(bagian) != 3:
+        await update.message.reply_text("Format salah.\n/deadline Matkul | Tugas | YYYY-MM-DD")
+        return
+
+    matkul  = bagian[0].strip()
+    tugas   = bagian[1].strip()
+    tanggal = bagian[2].strip()
+
+    cursor.execute(
+        "INSERT INTO deadline_tugas (tanggal, matkul, tugas) VALUES (?, ?, ?)",
+        (tanggal, matkul, tugas)
+    )
+    conn.commit()
+
+    await update.message.reply_text(
+        f"📅 Deadline disimpan\n\n"
+        f"📚 {matkul}\n"
+        f"📄 {tugas}\n"
+        f"🗓️ {tanggal}"
+    )
+
+
+async def listdeadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("""
+        SELECT id, tanggal, matkul, tugas
+        FROM deadline_tugas
+        WHERE selesai = 0
+        ORDER BY tanggal ASC
+    """)
+    data = cursor.fetchall()
+
+    if not data:
+        await update.message.reply_text("📭 Tidak ada deadline.")
+        return
+
+    pesan = "📅 Deadline Aktif\n\n"
+    for item in data:
+        id_tugas = item[0]
+        tanggal  = item[1]
+        matkul   = item[2]
+        tugas    = item[3]
+
+        sisa = (datetime.strptime(tanggal, "%Y-%m-%d") - datetime.now()).days
+
+        pesan += (
+            f"{id_tugas}.\n"
+            f"📚 {matkul}\n"
+            f"📄 {tugas}\n"
+            f"🗓️ {tanggal}\n"
+            f"⏳ {sisa} hari lagi\n\n"
+        )
+
+    await update.message.reply_text(pesan)
+
+
+async def selesaideadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Contoh:\n/selesaideadline 1")
+        return
+
+    id_tugas = context.args[0]
+    cursor.execute(
+        "UPDATE deadline_tugas SET selesai = 1 WHERE id = ?",
+        (id_tugas,)
+    )
+    conn.commit()
+    await update.message.reply_text("✅ Deadline ditandai selesai.")
+
+
+async def cek_deadline(context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute("""
+        SELECT id, tanggal, matkul, tugas
+        FROM deadline_tugas
+        WHERE selesai = 0
+    """)
+    data = cursor.fetchall()
+
+    if not data:
+        return
+
+    for item in data:
+        tanggal = item[1]
+        matkul  = item[2]
+        tugas   = item[3]
+
+        try:
+            sisa_hari = (datetime.strptime(tanggal, "%Y-%m-%d") - datetime.now()).days
+
+            if 0 <= sisa_hari <= 3:
+                await context.bot.send_message(
+                    chat_id=CHAT_ID_KAMU,
+                    text=(
+                        "⚠️ DEADLINE MENDEKAT\n\n"
+                        f"📚 {matkul}\n"
+                        f"📄 {tugas}\n"
+                        f"🗓️ {tanggal}\n"
+                        f"⏳ Tinggal {sisa_hari} hari lagi"
+                    )
+                )
+        except Exception:
+            pass
+
+
+async def dashboard_pagi(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        # JUMLAH TUGAS
+        cursor.execute("SELECT COUNT(*) FROM tugas")
+        total_tugas = cursor.fetchone()[0]
+
+        # DEADLINE TERDEKAT
+        cursor.execute("""
+            SELECT matkul, tugas, tanggal
+            FROM deadline_tugas
+            WHERE selesai = 0
+            ORDER BY tanggal ASC
+            LIMIT 1
+        """)
+        deadline_row = cursor.fetchone()
+        teks_deadline = "Tidak ada deadline"
+        if deadline_row:
+            matkul  = deadline_row[0]
+            tugas   = deadline_row[1]
+            tanggal = deadline_row[2]
+            sisa_hari = (datetime.strptime(tanggal, "%Y-%m-%d") - datetime.now()).days
+            teks_deadline = f"{matkul}\n📄 {tugas}\n⏳ {sisa_hari} hari lagi"
+
+        # PENGELUARAN BULAN INI
+        bulan = datetime.now().strftime("%Y-%m")
+        cursor.execute("""
+            SELECT SUM(nominal) FROM pengeluaran
+            WHERE substr(tanggal,1,7)=?
+        """, (bulan,))
+        total_pengeluaran = cursor.fetchone()[0] or 0
+
+        # TARGET TABUNGAN
+        cursor.execute("""
+            SELECT target FROM target_tabungan
+            WHERE bulan = ?
+            ORDER BY id DESC LIMIT 1
+        """, (bulan,))
+        hasil_target = cursor.fetchone()
+        teks_target = "Belum ada target"
+        if hasil_target:
+            nilai_target = hasil_target[0]
+            persen = (total_pengeluaran / nilai_target * 100) if nilai_target > 0 else 0
+            teks_target = f"Rp {nilai_target:,}\n📈 {persen:.1f}%"
+
+        # JURNAL HARI INI
+        hari_ini = datetime.now().strftime("%Y-%m-%d")
+        cursor.execute("SELECT COUNT(*) FROM jurnal WHERE tanggal = ?", (hari_ini,))
+        jumlah_jurnal = cursor.fetchone()[0]
+
+        pesan = (
+            "🌅 SELAMAT PAGI BAGAS\n\n"
+            f"📋 Tugas Aktif\n{total_tugas} tugas\n\n"
+            f"📅 Deadline Terdekat\n{teks_deadline}\n\n"
+            f"💰 Pengeluaran\nRp {total_pengeluaran:,}\n\n"
+            f"🎯 Target Tabungan\n{teks_target}\n\n"
+            f"📔 Jurnal Hari Ini\n{jumlah_jurnal} catatan\n\n"
+            "🚀 Semangat hari ini!"
+        )
+
+        await context.bot.send_message(chat_id=CHAT_ID_KAMU, text=pesan)
+
+    except Exception as e:
+        print("ERROR DASHBOARD PAGI:", e)
+
+
+async def statistik(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        # TUGAS
+        cursor.execute("SELECT COUNT(*) FROM tugas")
+        total_tugas = cursor.fetchone()[0]
+
+        # DEADLINE
+        cursor.execute("SELECT COUNT(*) FROM deadline_tugas WHERE selesai = 0")
+        total_deadline = cursor.fetchone()[0]
+
+        # PENGELUARAN BULAN INI
+        bulan = datetime.now().strftime("%Y-%m")
+        cursor.execute("""
+            SELECT SUM(nominal) FROM pengeluaran
+            WHERE substr(tanggal,1,7)=?
+        """, (bulan,))
+        total_pengeluaran = cursor.fetchone()[0] or 0
+
+        # TARGET TABUNGAN
+        cursor.execute("""
+            SELECT target FROM target_tabungan
+            WHERE bulan = ?
+            ORDER BY id DESC LIMIT 1
+        """, (bulan,))
+        hasil_target = cursor.fetchone()
+        teks_target  = "Belum ada target"
+        progress     = 0
+        nilai_target = 0
+        if hasil_target:
+            nilai_target = hasil_target[0]
+            progress = (total_pengeluaran / nilai_target * 100) if nilai_target > 0 else 0
+            teks_target = f"Rp {nilai_target:,}"
+
+        # JURNAL
+        cursor.execute("SELECT COUNT(*) FROM jurnal")
+        total_jurnal = cursor.fetchone()[0]
+
+        pesan = (
+            "📊 Statistik MyAiku\n\n"
+            f"📋 Tugas Aktif\n{total_tugas}\n\n"
+            f"📅 Deadline Aktif\n{total_deadline}\n\n"
+            f"💰 Total Pengeluaran\nRp {total_pengeluaran:,}\n\n"
+            f"🎯 Target Tabungan\n{teks_target}\n\n"
+            f"📈 Progress Target\n{progress:.1f}%\n\n"
+            f"📔 Total Jurnal\n{total_jurnal}\n\n"
+            "🚀 Tetap semangat!"
+        )
+
+        await update.message.reply_text(pesan)
+
+    except Exception as e:
+        await update.message.reply_text(f"Error:\n{e}")
+
+
+# ==========================================
+# V2.7 — REKAP BULANAN
+# ==========================================
+async def rekapbulan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /rekapbulan          → rekap bulan ini
+    /rekapbulan 2025-05  → rekap bulan tertentu
+    """
+    if context.args:
+        bulan = context.args[0]
+        # Validasi format YYYY-MM
+        try:
+            datetime.strptime(bulan, "%Y-%m")
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Format bulan salah.\nContoh: `/rekapbulan 2025-05`",
+                parse_mode="Markdown",
+            )
+            return
+    else:
+        bulan = datetime.now().strftime("%Y-%m")
+
+    # ── Total & jumlah transaksi ────────────
+    cursor.execute("""
+        SELECT SUM(nominal), COUNT(*)
+        FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+    """, (bulan,))
+    row    = cursor.fetchone()
+    total  = row[0] or 0
+    jumlah = row[1] or 0
+
+    if jumlah == 0:
+        await update.message.reply_text(
+            f"📭 Tidak ada data pengeluaran untuk bulan *{bulan}*.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ── Per kategori ───────────────────────
+    cursor.execute("""
+        SELECT kategori, SUM(nominal) as jml, COUNT(*) as cnt
+        FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+        GROUP BY kategori
+        ORDER BY jml DESC
+    """, (bulan,))
+    kat_rows = cursor.fetchall()
+
+    # ── Hari paling boros ──────────────────
+    cursor.execute("""
+        SELECT tanggal, SUM(nominal) as jml
+        FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+        GROUP BY tanggal
+        ORDER BY jml DESC
+        LIMIT 1
+    """, (bulan,))
+    hari_boros = cursor.fetchone()
+
+    # ── Transaksi terbesar ─────────────────
+    cursor.execute("""
+        SELECT nominal, keterangan, kategori, tanggal
+        FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+        ORDER BY nominal DESC
+        LIMIT 1
+    """, (bulan,))
+    transaksi_terbesar = cursor.fetchone()
+
+    # ── Target bulan tersebut ──────────────
+    cursor.execute("""
+        SELECT target FROM target_tabungan
+        WHERE bulan=?
+        ORDER BY id DESC LIMIT 1
+    """, (bulan,))
+    target_row   = cursor.fetchone()
+    nilai_target = target_row[0] if target_row else 0
+    sisa         = nilai_target - total
+    persen       = round(total / nilai_target * 100, 1) if nilai_target > 0 else 0
+    bar          = "█" * min(10, int(persen / 10)) + "░" * max(0, 10 - int(persen / 10))
+
+    # ── Deadline bulan itu ─────────────────
+    cursor.execute("""
+        SELECT COUNT(*) FROM deadline_tugas
+        WHERE substr(tanggal,1,7)=?
+    """, (bulan,))
+    total_deadline = cursor.fetchone()[0]
+
+    cursor.execute("""
+        SELECT COUNT(*) FROM deadline_tugas
+        WHERE substr(tanggal,1,7)=? AND selesai=1
+    """, (bulan,))
+    deadline_selesai = cursor.fetchone()[0]
+
+    # ── Jurnal bulan itu ───────────────────
+    cursor.execute("""
+        SELECT COUNT(*) FROM jurnal
+        WHERE substr(tanggal,1,7)=?
+    """, (bulan,))
+    total_jurnal = cursor.fetchone()[0]
+
+    # ── Rata-rata harian ───────────────────
+    cursor.execute("""
+        SELECT COUNT(DISTINCT tanggal) FROM pengeluaran
+        WHERE substr(tanggal,1,7)=?
+    """, (bulan,))
+    hari_aktif = cursor.fetchone()[0] or 1
+    rata_harian = total // hari_aktif
+
+    # ══════════════════════════════════════
+    # SUSUN PESAN
+    # ══════════════════════════════════════
+    pesan  = f"📊 *REKAP BULANAN — {bulan}*\n"
+    pesan += "━━━━━━━━━━━━━━━━━━━━\n\n"
+
+    pesan += "💸 *PENGELUARAN*\n"
+    pesan += f"   Total       : Rp {total:,}\n"
+    pesan += f"   Transaksi   : {jumlah}x\n"
+    pesan += f"   Hari aktif  : {hari_aktif} hari\n"
+    pesan += f"   Rata-rata   : Rp {rata_harian:,}/hari\n\n"
+
+    pesan += "🎯 *TARGET*\n"
+    if nilai_target > 0:
+        status = "✅ HEMAT" if sisa >= 0 else "❌ OVER BUDGET"
+        pesan += f"   Target      : Rp {nilai_target:,}\n"
+        pesan += f"   Terpakai    : `{bar}` {persen}%\n"
+        pesan += f"   Sisa        : Rp {sisa:,}\n"
+        pesan += f"   Status      : {status}\n\n"
+    else:
+        pesan += "   Tidak ada target bulan ini\n\n"
+
+    pesan += "🏷️ *PER KATEGORI*\n"
+    for k, v, c in kat_rows:
+        pct  = round(v / total * 100, 1) if total > 0 else 0
+        pesan += f"   • {k}: Rp {v:,} ({c}x, {pct}%)\n"
+    pesan += "\n"
+
+    if hari_boros:
+        pesan += f"📅 *HARI PALING BOROS*\n"
+        pesan += f"   {hari_boros[0]} — Rp {hari_boros[1]:,}\n\n"
+
+    if transaksi_terbesar:
+        pesan += f"💣 *TRANSAKSI TERBESAR*\n"
+        pesan += (
+            f"   Rp {transaksi_terbesar[0]:,}\n"
+            f"   {transaksi_terbesar[2]} — {transaksi_terbesar[1]}\n"
+            f"   📅 {transaksi_terbesar[3]}\n\n"
+        )
+
+    pesan += f"📅 *DEADLINE*\n"
+    pesan += f"   Total    : {total_deadline}\n"
+    pesan += f"   Selesai  : {deadline_selesai}\n"
+    pesan += f"   Sisa     : {total_deadline - deadline_selesai}\n\n"
+
+    pesan += f"📔 *JURNAL*\n"
+    pesan += f"   {total_jurnal} catatan bulan ini\n"
+
+    await update.message.reply_text(pesan, parse_mode="Markdown")
+
+
 # ==========================================
 # MAIN
 # ==========================================
@@ -841,23 +1352,30 @@ if __name__ == "__main__":
     init_db()
     print("✅ Database SQLite siap.")
     print("🤖 Bot V2 menyala...")
-    
-    print("TOKEN:", repr(TELEGRAM_TOKEN))
+
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Command handlers
-    app.add_handler(CommandHandler("start",   start))
-    app.add_handler(CommandHandler("tugas",   cmd_tugas))
-    app.add_handler(CommandHandler("uang",    cmd_uang))
-    app.add_handler(CommandHandler("cuaca",   cmd_cuaca))
+    app.add_handler(CommandHandler("start",           start))
+    app.add_handler(CommandHandler("tugas",           cmd_tugas))
+    app.add_handler(CommandHandler("uang",            cmd_uang))
+    app.add_handler(CommandHandler("cuaca",           cmd_cuaca))
+    app.add_handler(CommandHandler("target",          target))
+    app.add_handler(CommandHandler("progres",         progres))
+    app.add_handler(CommandHandler("jurnal",          jurnal))
+    app.add_handler(CommandHandler("jurnalhariini",   jurnal_hari_ini))
+    app.add_handler(CommandHandler("deadline",        deadline))
+    app.add_handler(CommandHandler("listdeadline",    listdeadline))
+    app.add_handler(CommandHandler("selesaideadline", selesaideadline))
+    app.add_handler(CommandHandler("statistik",       statistik))
+    app.add_handler(CommandHandler("rekapbulan",      rekapbulan))
 
-    # Inline keyboard router
     app.add_handler(CallbackQueryHandler(router))
-
-    # Semua pesan teks biasa → mode handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, teks_handler))
 
-    # Job pengingat
+    wib = pytz.timezone("Asia/Jakarta")
+
     app.job_queue.run_repeating(cek_pengingat, interval=60, first=10)
+    app.job_queue.run_daily(cek_deadline,    time=time(hour=5, minute=0,  tzinfo=wib))
+    app.job_queue.run_daily(dashboard_pagi,  time=time(hour=5, minute=5,  tzinfo=wib))
 
     app.run_polling()
