@@ -152,12 +152,17 @@ def kb_tugas():
 def kb_keuangan():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("💸 Catat Pengeluaran", callback_data="aksi_catat_uang")],
-        [InlineKeyboardButton("💰 Lihat Saldo",       callback_data="aksi_saldo")],
+        [InlineKeyboardButton("💰 Lihat Saldo", callback_data="aksi_saldo")],
+
         [
             InlineKeyboardButton("📅 Laporan Hari Ini", callback_data="aksi_laporan_hari"),
-            InlineKeyboardButton("📆 Laporan Bulan",    callback_data="aksi_laporan_bulan"),
+            InlineKeyboardButton("📆 Laporan Bulan", callback_data="aksi_laporan_bulan"),
         ],
+
+        [InlineKeyboardButton("📊 Rekap Bulanan", callback_data="aksi_rekap_bulan")],
+
         [InlineKeyboardButton("📊 Grafik Pengeluaran", callback_data="aksi_grafik")],
+
         [InlineKeyboardButton("🏠 Home", callback_data="home")],
     ])
 
@@ -412,6 +417,13 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Grafik Pengeluaran ─────────────────
     elif data == "aksi_grafik":
         await _kirim_grafik(query)
+    elif data == "aksi_rekap_bulan":
+    
+        bulan = datetime.now().strftime("%Y-%m")
+
+        context.args = []
+
+        await rekapbulan(update, context)
 
 
 # ==========================================
